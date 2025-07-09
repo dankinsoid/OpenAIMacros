@@ -61,6 +61,7 @@ let result = try await openAI.chatsWith(
     )
 )
 
+// prints "The current temperature in Boston is 22.5°C."
 print(result.choices[0].message.content ?? "No response")
 ```
 
@@ -151,9 +152,10 @@ var getCurrentWeatherCall: OpenAIFunctionWrapper {
 
 ## Advanced Usage
 
-### Multiple Functions
+### Multiple Functions (TODO - Future Version)
 
 ```swift
+// TODO: This pattern will be supported in a future version
 struct MyAPI {
     @openAIFunction
     func getWeather(location: String) async throws -> WeatherResponse {
@@ -165,6 +167,7 @@ struct MyAPI {
         // Implementation
     }
     
+    // TODO: Auto-generate this with @OpenAIFunctionsCollection macro
     var allFunctions: [OpenAIFunctionWrapper] {
         [getWeatherCall, searchRestaurantsCall]
     }
@@ -177,6 +180,8 @@ let result = try await openAI.chatsWith(
     query: query
 )
 ```
+
+**Current workaround**: For now, you need to manually create the `allFunctions` array or call each function wrapper individually.
 
 ### Error Handling
 
