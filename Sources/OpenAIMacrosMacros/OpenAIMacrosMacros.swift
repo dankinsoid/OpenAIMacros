@@ -10,9 +10,226 @@ public struct OpenAIFunctionMacro: PeerMacro {
         providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        // TODO: Implement macro that generates OpenAI function declarations
-        // from Swift function definitions
-        return []
+        guard let funcDecl = declaration.as(FunctionDeclSyntax.self) else {
+            throw MacroError.notAFunction
+        }
+        
+        let functionName = funcDecl.name.text
+        let parameters = funcDecl.signature.parameterClause.parameters
+        let docComment = extractDocComment(from: funcDecl)
+        
+        // Generate parameter struct
+        let parameterStruct = try generateParameterStruct(
+            functionName: functionName,
+            parameters: parameters,
+            docComment: docComment
+        )
+        
+        // Generate OpenAIFunctionWrapper variable
+        let wrapperVariable = try generateWrapperVariable(
+            functionName: functionName,
+            parameters: parameters,
+            docComment: docComment
+        )
+        
+        return [
+            DeclSyntax(parameterStruct),
+            DeclSyntax(wrapperVariable)
+        ]
+    }
+    
+    private static func extractDocComment(from funcDecl: FunctionDeclSyntax) -> String? {
+        // Extract doc comment from leading trivia
+        for trivia in funcDecl.leadingTrivia {
+            if case .docLineComment(let comment) = trivia {
+                return comment
+            }
+            if case .docBlockComment(let comment) = trivia {
+                return comment
+            }
+        }
+        return nil
+    }
+    
+    private static func generateParameterStruct(
+        functionName: String,
+        parameters: FunctionParameterListSyntax,
+        docComment: String?
+    ) throws -> StructDeclSyntax {
+        let structName = "\(functionName.capitalizedFirstLetter)Parameters"
+        
+        var structMembers: [MemberBlockItemSyntax] = []
+        
+        for param in parameters {
+            let paramName = param.secondName?.text ?? param.firstName.text
+            let paramType = param.type
+            
+            // Create struct property
+            let property = VariableDeclSyntax(
+                bindingSpecifier: .keyword(.let),
+                bindings: PatternBindingListSyntax([
+                    PatternBindingSyntax(
+                        pattern: IdentifierPatternSyntax(identifier: .identifier(paramName)),
+                        typeAnnotation: TypeAnnotationSyntax(type: paramType)
+                    )
+                ])
+            )
+            
+            structMembers.append(MemberBlockItemSyntax(decl: property))
+        }
+        
+        return StructDeclSyntax(
+            name: .identifier(structName),
+            inheritanceClause: InheritanceClauseSyntax(
+                inheritedTypes: InheritedTypeListSyntax([
+                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Codable"))),
+                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Hashable"))),
+                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Sendable")))
+                ])
+            ),
+            memberBlock: MemberBlockSyntax(members: MemberBlockItemListSyntax(structMembers))
+        )
+    }
+    
+    private static func generateWrapperVariable(
+        functionName: String,
+        parameters: FunctionParameterListSyntax,
+        docComment: String?
+    ) throws -> VariableDeclSyntax {
+        let variableName = "\(functionName)Call"
+        
+        // For now, create a simple placeholder that compiles
+        // TODO: Generate the full OpenAIFunctionWrapper expression
+        let placeholderExpression = """
+        OpenAIFunctionWrapper(
+            difinition: ChatQuery.ChatCompletionToolParam.FunctionDefinition(
+                name: "\(functionName)",
+                description: "Generated function",
+                parameters: .init(fields: [
+                    .type(.object),
+                    .properties([:]),
+                    .required([])
+                ])
+            )
+        ) { decoder, data, encoder in
+            throw NSError(domain: "NotImplemented", code: 0, userInfo: nil)
+        }
+        """
+        
+        return try VariableDeclSyntax(
+            """
+            var \(raw: variableName): OpenAIFunctionWrapper {
+                // TODO: Implement full wrapper generation
+                fatalError("Macro expansion not yet complete")
+            }
+            """
+        )
+    }
+    
+    private static func parseFunctionDescription(from docComment: String?) -> String? {
+        guard let docComment = docComment else { return nil }
+        
+        // Extract first line of doc comment as function description
+        let lines = docComment.components(separatedBy: .newlines)
+        return lines.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private static func generateSchemaProperties(
+        parameters: FunctionParameterListSyntax,
+        docComment: String?
+    ) throws -> String {
+        var properties: [String] = []
+        
+        for param in parameters {
+            let paramName = param.secondName?.text ?? param.firstName.text
+            let paramType = param.type
+            
+            // Parse parameter description from doc comment
+            let paramDescription = parseParameterDescription(paramName: paramName, from: docComment)
+            
+            // Generate schema for this parameter type using runtime helper
+            let descriptionPart = paramDescription.map { ", description: \"\($0)\"" } ?? ""
+            let schema = "OpenAISchema.forType(\(paramType).self\(descriptionPart))"
+            
+            let property = """
+            "\(paramName)": .init(fields: \(schema))
+            """
+            properties.append(property)
+        }
+        
+        return properties.joined(separator: ",\n                        ")
+    }
+    
+    private static func generateRequiredFields(parameters: FunctionParameterListSyntax) -> String {
+        var requiredFields: [String] = []
+        
+        for param in parameters {
+            let paramName = param.secondName?.text ?? param.firstName.text
+            
+            // Check if parameter is optional (has default value or is Optional type)
+            let isOptional = param.defaultValue != nil || isOptionalType(param.type)
+            
+            if !isOptional {
+                requiredFields.append("\"\(paramName)\"")
+            }
+        }
+        
+        return requiredFields.joined(separator: ", ")
+    }
+    
+    private static func generateFunctionCallArguments(parameters: FunctionParameterListSyntax) -> String {
+        var arguments: [String] = []
+        
+        for param in parameters {
+            let paramName = param.secondName?.text ?? param.firstName.text
+            let firstName = param.firstName.text
+            
+            if firstName == "_" {
+                arguments.append("parameters.\(paramName)")
+            } else {
+                arguments.append("\(firstName): parameters.\(paramName)")
+            }
+        }
+        
+        return arguments.joined(separator: ", ")
+    }
+    
+    private static func parseParameterDescription(paramName: String, from docComment: String?) -> String? {
+        guard let docComment = docComment else { return nil }
+        
+        // Look for parameter description in doc comment
+        let lines = docComment.components(separatedBy: .newlines)
+        for line in lines {
+            if line.contains("- \(paramName):") {
+                return line.replacingOccurrences(of: "- \(paramName):", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        
+        return nil
+    }
+    
+    private static func isOptionalType(_ type: TypeSyntax) -> Bool {
+        // Check if type is Optional
+        if let optionalType = type.as(OptionalTypeSyntax.self) {
+            return true
+        }
+        
+        // Check if type is Optional<T> syntax
+        if let identifierType = type.as(IdentifierTypeSyntax.self) {
+            return identifierType.name.text == "Optional"
+        }
+        
+        return false
+    }
+}
+
+enum MacroError: Error {
+    case notAFunction
+}
+
+extension String {
+    var capitalizedFirstLetter: String {
+        return prefix(1).uppercased() + dropFirst()
     }
 }
 
