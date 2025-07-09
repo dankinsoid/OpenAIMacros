@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:OpenAIMacros}",
+      "name": "Debug OpenAIMacrosClient",
+      "program": "${workspaceFolder:OpenAIMacros}/.build/debug/OpenAIMacrosClient",
+      "preLaunchTask": "swift: Build Debug OpenAIMacrosClient"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:OpenAIMacros}",
+      "name": "Release OpenAIMacrosClient",
+      "program": "${workspaceFolder:OpenAIMacros}/.build/release/OpenAIMacrosClient",
+      "preLaunchTask": "swift: Build Release OpenAIMacrosClient"
+    }
+  ]
+}
