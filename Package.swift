@@ -53,7 +53,7 @@ let package = Package(
         .testTarget(
             name: "OpenAIMacrosTests",
             dependencies: [
-                "OpenAI",
+				"OpenAIMacros",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
             ]
         ),

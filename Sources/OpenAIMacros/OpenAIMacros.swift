@@ -22,7 +22,7 @@ extension OpenAI {
     ///   - functions: Array of OpenAI function wrappers to make available
     ///   - query: The chat query to send
     /// - Returns: Chat result with function calls automatically executed
-    func chatsWith(
+    public func chatsWith(
         functions: [OpenAIFunctionWrapper],
         query: ChatQuery
     ) async throws -> ChatResult {
@@ -136,22 +136,6 @@ extension OpenAI {
     }
 }
 
-struct Functions {
-
-	/// Function that retrieves the current weather for a given location.
-	/// - Parameters:
-	///  - location: The location for which to get the weather.
-	@openAIFunction
-	func getCurrentWeather(location: String, unit: WeatherUnit? = nil) async throws -> String {
-		""
-	}
-	
-	enum WeatherUnit: String, CaseIterable, Codable {
-		case celsius
-		case fahrenheit
-	}
-}
-
 extension AnyJSONSchema {
 
 	public static func forType(_ type: Any.Type) -> AnyJSONSchema {
@@ -178,10 +162,12 @@ extension AnyJSONSchema {
 			let enumValues = values.map { AnyJSONDocument($0) }
 			fields.append(.type(.string))
 			fields.append(.enumValues(enumValues))
-		} else if type is any JSONDocument.Type {
-			fatalError("not implemented yet")
+		} else if type is Dictionary<String, Any>.Type {
+			// Handle dictionaries as JSON objects
+			fields.append(.type(.object))
 		} else if type is any Collection.Type {
-			fatalError("not implemented yet")
+			// Handle other collections as arrays
+			fields.append(.type(.array))
 		} else if type is any Codable.Type {
 			// Handle custom Codable types as objects
 			fields.append(.type(.object))
@@ -191,7 +177,7 @@ extension AnyJSONSchema {
 		}
 		
 		// Add description if provided
-		if let description = description {
+		if let description {
 			fields.append(.description(description))
 		}
 		
