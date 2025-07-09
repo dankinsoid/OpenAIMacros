@@ -15,9 +15,125 @@ import Foundation
 @attached(peer, names: arbitrary)
 public macro openAIFunction() = #externalMacro(module: "OpenAIMacrosMacros", type: "OpenAIFunctionMacro")
 
-/// Convenience extensions for working with OpenAI function calls
 extension OpenAI {
-    // TODO: Add helper methods for easier function calling integration
+
+    /// Enhanced chat method that automatically handles function calling workflow
+    /// - Parameters:
+    ///   - functions: Array of OpenAI function wrappers to make available
+    ///   - query: The chat query to send
+    /// - Returns: Chat result with function calls automatically executed
+    func chatsWith(
+        functions: [OpenAIFunctionWrapper],
+        query: ChatQuery
+    ) async throws -> ChatResult {
+        var messages = query.messages
+        let tools = query.tools ?? [] + functions.map { .init(function: $0.difinition) }
+        let query = ChatQuery(
+            messages: messages,
+            model: query.model,
+            modalities: query.modalities,
+            audioOptions: query.audioOptions,
+            reasoningEffort: query.reasoningEffort,
+            frequencyPenalty: query.frequencyPenalty,
+            logitBias: query.logitBias,
+            logprobs: query.logprobs,
+            maxCompletionTokens: query.maxCompletionTokens,
+            metadata: query.metadata,
+            n: query.n,
+            parallelToolCalls: query.parallelToolCalls,
+            prediction: query.prediction,
+            presencePenalty: query.presencePenalty,
+            responseFormat: query.responseFormat,
+            seed: query.seed,
+            serviceTier: query.serviceTier,
+            stop: query.stop,
+            store: query.store,
+            temperature: query.temperature,
+            toolChoice: query.toolChoice,
+            tools: tools,
+            topLogprobs: query.topLogprobs,
+            topP: query.topP,
+            user: query.user,
+            webSearchOptions: query.webSearchOptions,
+            stream: query.stream,
+            streamOptions: query.streamOptions
+        )
+        
+        let result0 = try await chats(query: query)
+        let calls = result0.choices.flatMap { $0.message.toolCalls ?? [] }
+        
+        guard !calls.isEmpty else {
+            return result0
+        }
+        
+        var outputParams: [String] = []
+        
+        let encoder = JSONEncoder()
+        
+        let dictionary: [String: OpenAIFunctionWrapper] = Dictionary(functions.map { ($0.difinition.name, $0) }) { _, rhs in rhs }
+
+        for call in calls {
+            guard let function = dictionary[call.function.name] else {
+                throw UnknownFunctionCall(functionName: call.function.name)
+            }
+            guard let data = call.function.arguments.data(using: .utf8) else {
+                throw InvalidString(message: "Invalid function call arguments for \(call.function.name)")
+            }
+            let outputData = try await function.execution(JSONDecoder(), data, encoder)
+            guard let output = String(data: outputData, encoding: .utf8) else {
+                throw InvalidString(message: "Failed to decode output for \(call.function.name)")
+            }
+            let param = Components.Schemas.FunctionCallOutputItemParam(
+                callId: call.id,
+                _type: .functionCallOutput,
+                output: output
+            )
+            guard let jsonString = String(data: try encoder.encode(param), encoding: .utf8) else {
+                throw InvalidString(message: "Failed to encode output for \(call.function.name)")
+            }
+            outputParams.append(jsonString)
+        }
+        
+        guard !outputParams.isEmpty else {
+            return result0
+        }
+
+        messages += outputParams.map { .user(.init(content: .string($0))) }
+
+        return try await chatsWith(
+            functions: functions,
+            query: ChatQuery(
+                messages: messages,
+                model: query.model,
+                modalities: query.modalities,
+                audioOptions: query.audioOptions,
+                reasoningEffort: query.reasoningEffort,
+                frequencyPenalty: query.frequencyPenalty,
+                logitBias: query.logitBias,
+                logprobs: query.logprobs,
+                maxCompletionTokens: query.maxCompletionTokens,
+                metadata: query.metadata,
+                n: query.n,
+                parallelToolCalls: query.parallelToolCalls,
+                prediction: query.prediction,
+                presencePenalty: query.presencePenalty,
+                responseFormat: query.responseFormat,
+                seed: query.seed,
+                serviceTier: query.serviceTier,
+                stop: query.stop,
+                store: query.store,
+                temperature: query.temperature,
+                toolChoice: query.toolChoice,
+                tools: query.tools,
+                topLogprobs: query.topLogprobs,
+                topP: query.topP,
+                user: query.user,
+                webSearchOptions: query.webSearchOptions,
+                stream: query.stream,
+                streamOptions: query.streamOptions
+            )
+        )
+    }
 }
 
 struct Functions {
@@ -26,7 +142,7 @@ struct Functions {
 	/// - Parameters:
 	///  - location: The location for which to get the weather.
 	@openAIFunction
-	func getCurrentWeather(location: String, unit: WeatherUnit = .celsius) async throws -> String {
+	func getCurrentWeather(location: String, unit: WeatherUnit? = nil) async throws -> String {
 		""
 	}
 	
@@ -95,5 +211,31 @@ public struct OpenAIFunctionWrapper {
     ) {
         self.difinition = difinition
         self.execution = execution
+    }
+}
+
+/// Error thrown when OpenAI tries to call a function that doesn't exist
+public struct UnknownFunctionCall: Error, LocalizedError {
+    public let functionName: String
+    
+    public init(functionName: String) {
+        self.functionName = functionName
+    }
+    
+    public var errorDescription: String? {
+        return "Unknown function call: \(functionName)"
+    }
+}
+
+/// Error thrown when string conversion fails during function calling
+public struct InvalidString: Error, LocalizedError {
+    public let message: String
+    
+    public init(message: String) {
+        self.message = message
+    }
+    
+    public var errorDescription: String? {
+        return message
     }
 }

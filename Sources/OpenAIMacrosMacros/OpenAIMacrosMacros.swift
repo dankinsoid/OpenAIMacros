@@ -67,8 +67,12 @@ public struct OpenAIFunctionMacro: PeerMacro {
     ) throws -> StructDeclSyntax {
         let structName = "\(functionName.capitalizedFirstLetter)Parameters"
         
-        // Check if we have any parameters with default values
-        let hasDefaultValues = parameters.contains { $0.defaultValue != nil }
+        // Check if we have any parameters with meaningful default values (not nil)
+        let hasDefaultValues = parameters.contains { param in
+            guard let defaultValue = param.defaultValue else { return false }
+            // Skip nil default values - they should be treated as optional parameters
+            return defaultValue.value.description != "nil"
+        }
         
         var propertyDeclarations: [String] = []
         var decodingStatements: [String] = []
@@ -77,12 +81,12 @@ public struct OpenAIFunctionMacro: PeerMacro {
             let paramName = param.secondName?.text ?? param.firstName.text
             let paramType = param.type
             
-            if let defaultValue = param.defaultValue {
-                // Parameter has default value - make it optional in decoding
+            if let defaultValue = param.defaultValue, defaultValue.value.description != "nil" {
+                // Parameter has meaningful default value - make it optional in decoding
                 propertyDeclarations.append("let \(paramName): \(paramType)")
                 decodingStatements.append("self.\(paramName) = try container.decodeIfPresent(\(paramType).self, forKey: .\(paramName)) ?? \(defaultValue.value)")
             } else {
-                // Required parameter
+                // Required parameter (including nil defaults, which should be treated as optional)
                 propertyDeclarations.append("let \(paramName): \(paramType)")
                 decodingStatements.append("self.\(paramName) = try container.decode(\(paramType).self, forKey: .\(paramName))")
             }
