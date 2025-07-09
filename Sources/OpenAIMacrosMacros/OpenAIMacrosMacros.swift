@@ -27,6 +27,7 @@ public struct OpenAIFunctionMacro: PeerMacro {
 
         // Generate OpenAIFunctionWrapper variable
         let wrapperVariable = try generateWrapperVariable(
+            functionDecl: funcDecl,
             functionName: functionName,
             parameters: parameters,
             docComment: docComment
@@ -39,16 +40,24 @@ public struct OpenAIFunctionMacro: PeerMacro {
     }
 
     private static func extractDocComment(from funcDecl: FunctionDeclSyntax) -> String? {
-        // Extract doc comment from leading trivia
+        // Extract all doc comment lines from leading trivia
+        var docCommentLines: [String] = []
+        
         for trivia in funcDecl.leadingTrivia {
             if case let .docLineComment(comment) = trivia {
-                return comment
+                docCommentLines.append(comment)
             }
             if case let .docBlockComment(comment) = trivia {
-                return comment
+                docCommentLines.append(comment)
             }
         }
-        return nil
+        
+        if docCommentLines.isEmpty {
+            return nil
+        }
+        
+        // Join all doc comment lines
+        return docCommentLines.joined(separator: "\n")
     }
 
     private static func generateParameterStruct(
@@ -57,41 +66,63 @@ public struct OpenAIFunctionMacro: PeerMacro {
         docComment _: String?
     ) throws -> StructDeclSyntax {
         let structName = "\(functionName.capitalizedFirstLetter)Parameters"
-
-        var structMembers: [MemberBlockItemSyntax] = []
-
+        
+        // Check if we have any parameters with default values
+        let hasDefaultValues = parameters.contains { $0.defaultValue != nil }
+        
+        var propertyDeclarations: [String] = []
+        var decodingStatements: [String] = []
+        
         for param in parameters {
             let paramName = param.secondName?.text ?? param.firstName.text
             let paramType = param.type
-
-            // Create struct property
-            let property = VariableDeclSyntax(
-                bindingSpecifier: .keyword(.let),
-                bindings: PatternBindingListSyntax([
-                    PatternBindingSyntax(
-                        pattern: IdentifierPatternSyntax(identifier: .identifier(paramName)),
-                        typeAnnotation: TypeAnnotationSyntax(type: paramType)
-                    ),
-                ])
-            )
-
-            structMembers.append(MemberBlockItemSyntax(decl: property))
+            
+            if let defaultValue = param.defaultValue {
+                // Parameter has default value - make it optional in decoding
+                propertyDeclarations.append("let \(paramName): \(paramType)")
+                decodingStatements.append("self.\(paramName) = try container.decodeIfPresent(\(paramType).self, forKey: .\(paramName)) ?? \(defaultValue.value)")
+            } else {
+                // Required parameter
+                propertyDeclarations.append("let \(paramName): \(paramType)")
+                decodingStatements.append("self.\(paramName) = try container.decode(\(paramType).self, forKey: .\(paramName))")
+            }
         }
-
-        return StructDeclSyntax(
-            name: .identifier(structName),
-            inheritanceClause: InheritanceClauseSyntax(
-                inheritedTypes: InheritedTypeListSyntax([
-                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Codable"))),
-                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Hashable"))),
-                    InheritedTypeSyntax(type: IdentifierTypeSyntax(name: .identifier("Sendable"))),
-                ])
-            ),
-            memberBlock: MemberBlockSyntax(members: MemberBlockItemListSyntax(structMembers))
-        )
+        
+        if hasDefaultValues {
+            // Generate struct with custom init(from:) decoder
+            return try StructDeclSyntax(
+                """
+                struct \(raw: structName): Decodable {
+                    \(raw: propertyDeclarations.joined(separator: "\n    "))
+                    
+                    init(from decoder: Decoder) throws {
+                        let container = try decoder.container(keyedBy: CodingKeys.self)
+                        \(raw: decodingStatements.joined(separator: "\n        "))
+                    }
+                    
+                    private enum CodingKeys: String, CodingKey {
+                        \(raw: parameters.map { param in
+                            let paramName = param.secondName?.text ?? param.firstName.text
+                            return "case \(paramName)"
+                        }.joined(separator: "\n        "))
+                    }
+                }
+                """
+            )
+        } else {
+            // Simple struct without custom decoder
+            return try StructDeclSyntax(
+                """
+                struct \(raw: structName): Decodable {
+                    \(raw: propertyDeclarations.joined(separator: "\n    "))
+                }
+                """
+            )
+        }
     }
 
     private static func generateWrapperVariable(
+        functionDecl: FunctionDeclSyntax,
         functionName: String,
         parameters: FunctionParameterListSyntax,
         docComment: String?
@@ -106,6 +137,15 @@ public struct OpenAIFunctionMacro: PeerMacro {
         let schemaProperties = try generateSchemaProperties(parameters: parameters, docComment: docComment)
         let requiredFields = generateRequiredFields(parameters: parameters)
         let functionCallArguments = generateFunctionCallArguments(parameters: parameters)
+        
+        // Detect if function is async or throws
+        let isAsync = functionDecl.signature.effectSpecifiers?.asyncSpecifier != nil
+        let isThrows = functionDecl.signature.effectSpecifiers?.throwsSpecifier != nil
+        
+        // Build function call with appropriate keywords
+        let awaitKeyword = isAsync ? "await " : ""
+        let tryKeyword = isThrows ? "try " : ""
+        let functionCall = "\(tryKeyword)\(awaitKeyword)\(functionName)(\(functionCallArguments))"
 
         return try VariableDeclSyntax(
             """
@@ -122,7 +162,7 @@ public struct OpenAIFunctionMacro: PeerMacro {
                     )
                 ) { [self] decoder, data, encoder in
                     let parameters = try decoder.decode(\(raw: parameterStructName).self, from: data)
-                    let result = \(raw: functionName)(\(raw: functionCallArguments))
+                    let result = \(raw: functionCall)
                     return try encoder.encode(result)
                 }
             }
@@ -135,7 +175,16 @@ public struct OpenAIFunctionMacro: PeerMacro {
 
         // Extract first line of doc comment as function description
         let lines = docComment.components(separatedBy: .newlines)
-        return lines.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let firstLine = lines.first else { return nil }
+        
+        // Clean up doc comment markers
+        let cleaned = firstLine
+            .replacingOccurrences(of: "///", with: "")
+            .replacingOccurrences(of: "/**", with: "")
+            .replacingOccurrences(of: "*/", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     private static func generateSchemaProperties(
@@ -152,17 +201,10 @@ public struct OpenAIFunctionMacro: PeerMacro {
             let paramDescription = parseParameterDescription(paramName: paramName, from: docComment)
 
             // Generate schema for this parameter type using runtime helper
-            var schema = "try AnyJSONSchema.forType(\(paramType).self)"
-
-            // Add description if available
-            if let description = paramDescription {
-                schema = """
-                {
-                    var schema = try AnyJSONSchema.forType(\(paramType).self)
-                    schema.fields.append(.description("\(description)"))
-                    return schema
-                }()
-                """
+            let schema = if let description = paramDescription {
+                "AnyJSONSchema.forType(\(paramType).self, description: \"\(description)\")"
+            } else {
+                "AnyJSONSchema.forType(\(paramType).self)"
             }
 
             let property = """
@@ -231,14 +273,22 @@ public struct OpenAIFunctionMacro: PeerMacro {
                 // ///  - paramName: description
                 // - Parameter paramName: description
                 if trimmedLine.contains("- \(paramName):") {
-                    return trimmedLine.replacingOccurrences(of: "- \(paramName):", with: "")
+                    let description = trimmedLine.replacingOccurrences(of: "- \(paramName):", with: "")
+                        .replacingOccurrences(of: "///", with: "")
+                        .replacingOccurrences(of: "/**", with: "")
+                        .replacingOccurrences(of: "*/", with: "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return description.isEmpty ? nil : description
                 }
 
                 // Handle "- Parameter paramName: description" format
                 if trimmedLine.contains("- Parameter \(paramName):") {
-                    return trimmedLine.replacingOccurrences(of: "- Parameter \(paramName):", with: "")
+                    let description = trimmedLine.replacingOccurrences(of: "- Parameter \(paramName):", with: "")
+                        .replacingOccurrences(of: "///", with: "")
+                        .replacingOccurrences(of: "/**", with: "")
+                        .replacingOccurrences(of: "*/", with: "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return description.isEmpty ? nil : description
                 }
 
                 // Stop if we hit another section or empty line after parameters

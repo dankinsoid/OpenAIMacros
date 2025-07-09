@@ -21,49 +21,65 @@ extension OpenAI {
 }
 
 struct Functions {
-	
+
 	/// Function that retrieves the current weather for a given location.
 	/// - Parameters:
 	///  - location: The location for which to get the weather.
 	@openAIFunction
-	func getCurrentWeather(location: String, unit: String = "celsius") -> String {
+	func getCurrentWeather(location: String, unit: WeatherUnit = .celsius) async throws -> String {
 		""
+	}
+	
+	enum WeatherUnit: String, CaseIterable, Codable {
+		case celsius
+		case fahrenheit
 	}
 }
 
 extension AnyJSONSchema {
 
-	public static func forType(_ type: Any.Type) throws -> AnyJSONSchema {
+	public static func forType(_ type: Any.Type) -> AnyJSONSchema {
+		return forType(type, description: nil)
+	}
+	
+	public static func forType(_ type: Any.Type, description: String?) -> AnyJSONSchema {
+		var fields: [JSONSchemaField] = []
+		
 		// Basic type mapping
 		if type == String.self {
-			return AnyJSONSchema(fields: [.type(.string)])
+			fields.append(.type(.string))
 		} else if type == Int.self || type == Int32.self || type == Int64.self {
-			return AnyJSONSchema(fields: [.type(.integer)])
+			fields.append(.type(.integer))
 		} else if type == Double.self || type == Float.self {
-			return AnyJSONSchema(fields: [.type(.number)])
+			fields.append(.type(.number))
 		} else if type == Bool.self {
-			return AnyJSONSchema(fields: [.type(.boolean)])
+			fields.append(.type(.boolean))
 		} else if let caseIterable = type as? any CaseIterable.Type {
 			// Handle enums that conform to both CaseIterable and RawRepresentable
 			let values = caseIterable.allCases.compactMap { case_ in
 				(case_ as? any RawRepresentable)?.rawValue as? any JSONDocument
 			}
 			let enumValues = values.map { AnyJSONDocument($0) }
-			return AnyJSONSchema(fields: [
-				.type(.string),
-				.enumValues(enumValues)
-			])
+			fields.append(.type(.string))
+			fields.append(.enumValues(enumValues))
 		} else if type is any JSONDocument.Type {
 			fatalError("not implemented yet")
 		} else if type is any Collection.Type {
 			fatalError("not implemented yet")
 		} else if type is any Codable.Type {
 			// Handle custom Codable types as objects
-			return AnyJSONSchema(fields: [.type(.object)])
+			fields.append(.type(.object))
 		} else {
 			// Default to string for unknown types
-			return AnyJSONSchema(fields: [.type(.string)])
+			fields.append(.type(.string))
 		}
+		
+		// Add description if provided
+		if let description = description {
+			fields.append(.description(description))
+		}
+		
+		return AnyJSONSchema(fields: fields)
 	}
 }
 
@@ -72,7 +88,7 @@ public struct OpenAIFunctionWrapper {
 
     public let difinition: ChatQuery.ChatCompletionToolParam.FunctionDefinition
     public let execution: (JSONDecoder, Data, JSONEncoder) async throws -> Data
-    
+
     public init(
         difinition: ChatQuery.ChatCompletionToolParam.FunctionDefinition,
         execution: @escaping (JSONDecoder, Data, JSONEncoder) async throws -> Data
