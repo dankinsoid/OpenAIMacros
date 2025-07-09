@@ -20,22 +20,50 @@ extension OpenAI {
     // TODO: Add helper methods for easier function calling integration
 }
 
+struct Functions {
+	
+	/// Function that retrieves the current weather for a given location.
+	/// - Parameters:
+	///  - location: The location for which to get the weather.
+	@openAIFunction
+	func getCurrentWeather(location: String, unit: String = "celsius") -> String {
+		""
+	}
+}
+
 extension AnyJSONSchema {
 
 	public static func forType(_ type: Any.Type) throws -> AnyJSONSchema {
-		fatalError("Not implemented")
-//		if let caseIterable = type as? any CaseIterable.Type,
-//		   let rawRepresentable = type as? any RawRepresentable.Type,
-//		   let firstCase = caseIterable.allCases.first {
-//			let values = caseIterable.allCases.compactMap({ $0 as? any RawRepresentable })
-//			return AnyJSONSchema(
-//				fields: [
-////					.type(AnyJSONSchema.forType(rawRepresentable.RawValue.self))
-//					.enumValues(values.map { AnyJSONDocument.init(<#T##value: any JSONDocument##any JSONDocument#>) })
-//				]
-//				
-//			)
-//		}
+		// Basic type mapping
+		if type == String.self {
+			return AnyJSONSchema(fields: [.type(.string)])
+		} else if type == Int.self || type == Int32.self || type == Int64.self {
+			return AnyJSONSchema(fields: [.type(.integer)])
+		} else if type == Double.self || type == Float.self {
+			return AnyJSONSchema(fields: [.type(.number)])
+		} else if type == Bool.self {
+			return AnyJSONSchema(fields: [.type(.boolean)])
+		} else if let caseIterable = type as? any CaseIterable.Type {
+			// Handle enums that conform to both CaseIterable and RawRepresentable
+			let values = caseIterable.allCases.compactMap { case_ in
+				(case_ as? any RawRepresentable)?.rawValue as? any JSONDocument
+			}
+			let enumValues = values.map { AnyJSONDocument($0) }
+			return AnyJSONSchema(fields: [
+				.type(.string),
+				.enumValues(enumValues)
+			])
+		} else if type is any JSONDocument.Type {
+			fatalError("not implemented yet")
+		} else if type is any Collection.Type {
+			fatalError("not implemented yet")
+		} else if type is any Codable.Type {
+			// Handle custom Codable types as objects
+			return AnyJSONSchema(fields: [.type(.object)])
+		} else {
+			// Default to string for unknown types
+			return AnyJSONSchema(fields: [.type(.string)])
+		}
 	}
 }
 
